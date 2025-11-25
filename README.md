@@ -1,10 +1,10 @@
 # CSP model explainer
 
-There are a few key pieces of the model that I'll explain in turn:
-- Variables
-- Constraints
-- Constraint integration & forgetting
-- Agent
+There are a few key pieces of the model:
+- Variables (grammar.py)
+- Constraints (constraints.py)
+- Constraint integration & forgetting (utils/assignment_utils.py mostly)
+- Agent (agent.py)
 
 
 
@@ -86,7 +86,7 @@ print("\nAfter v1.assign(1), expression prints as:", S)   # (v0 + 1 + v2)
 ```
 
     Expression: (v0 + v1 + v2)
-    Variables: {'v0', 'v1', 'v2'}
+    Variables: {'v1', 'v2', 'v0'}
     
     Partial assignment: {'v0': 1, 'v2': 0}
     S.evaluate(partial): 1
@@ -109,7 +109,7 @@ The base `Constraint` class represents a relationship between a set of variables
 - `get_effective_target(partial_assignment=None)` subtracts the contributions of any already-assigned variables (and any bindings supplied via `partial_assignment`) from the original target. The result is the remaining total the still-unassigned variables must realize, regardless of whether those variables are binary or have larger domains.
 - `test_contradiction()` (implemented by subclasses) asks “can the remaining variables still reach the effective target?” If not, the constraint is currently impossible to satisfy.
 - `evaluate(assignment)` (subclass-specific) expects a complete assignment mapping and returns `1` when the constraint is satisfied and `0` otherwise.
-- `possible_solutions(partial_assignment=None, subset_vars=None)` lazily yields assignments that satisfy the constraint. You can optionally pass a partial assignment to condition on certain values and/or restrict enumeration to a subset of the unassigned variables.
+- `possible_solutions(partial_assignment=None, subset_vars=None)` lazily yields assignments that satisfy the constraint. You can optionally pass a partial assignment to condition on certain values and/or restrict enumeration to a subset of the unassigned variables. This is the **most important** method to understand.
 
 Understanding these methods makes it easier to reason about concrete constraints, so next we focus on `EqualityConstraint`. (There are a bunch of other constraint types, like InequalityConstraints and UniquenessConstraints, but we'll just start with equalities, cause they're pretty simple...).
 
@@ -153,7 +153,7 @@ print_assignments(solutions)
 
 ```
 
-    Constraint: (v0 + v1 + v2 = 2)
+    Constraint: (v1 + v2 + v0 = 2)
     Contradiction?: False
     
     Variable assignments:
@@ -189,7 +189,7 @@ v0.unassign() #undoes mutation to v0
 
     
     After assigning v0 = 1...
-    Constraint now prints as: (1 + v1 + v2 = 2)
+    Constraint now prints as: (v1 + v2 + 1 = 2)
     Effective target: 1
     Contradiction?: False
     
@@ -240,17 +240,15 @@ An equality constraint becomes contradictory when the already-assigned variables
 
 
 ```python
-# Build a constraint: exactly one of v0, v1, v2 should be 1
-v0 = Variable("v0")
-v1 = Variable("v1")
-v2 = Variable("v2")
-constraint = EqualityConstraint({v0, v1, v2}, target=1)
+v0, v1, v2 = Variable("v0"), Variable("v1"), Variable("v2")
+
+constraint = EqualityConstraint({v0, v1, v2}, target=1) #v0 + v1 + v2 = 1
 print(constraint)
 print("Contradiction?:", constraint.test_contradiction())
 
 ```
 
-    (v0 + v1 + v2 = 1)
+    (v1 + v2 + v0 = 1)
     Contradiction?: False
 
 
@@ -285,7 +283,7 @@ print("Contradiction?:", constraint.test_contradiction())
 
 ```
 
-    Released vars: {'v0', 'v1'}
+    Released vars: {'v1', 'v0'}
     Current values: None None 0
     Contradiction?: False
 
@@ -302,12 +300,13 @@ We’ll create a partial constraint that only tracks `v0` and `v1`, and then ign
 
 
 ```python
-base_constraint = EqualityConstraint({v0, v1, v2}, target=1)
+v0, v1, v2 = Variable("v0"), Variable("v1"), Variable("v2")
+base_constraint = EqualityConstraint({v0, v1, v2}, target=1) #v0 + v1 + v2 = 1
 print(base_constraint)
 
 ```
 
-    (v0 + v1 + 0 = 1)
+    (v1 + v2 + v0 = 1)
 
 
 Wrap it with `PartialConstraint`, which simplifies it to only consider valid possibilities containing `{v0, v1}`. 
@@ -317,48 +316,190 @@ Wrap it with `PartialConstraint`, which simplifies it to only consider valid pos
 ```python
 pc_partial = PartialConstraint(base_constraint, {v0, v1})
 print(pc_partial)
-print("Subset vars:", {v.name for v in pc_partial.get_variables()})
+print_assignments(list(pc_partial.possible_solutions()))
 
 ```
 
-    ((v0 + v1 + 0 = 1), vars={v0,v1})
-    Subset vars: {'v0', 'v1'}
+    ((v1 + v2 + v0 = 1), vars={v0,v1})
+    
+    v0  v1
+    ------
+     0   0
+     1   0
+     0   1
+    
 
 
-`possible_solutions()` now enumerates assignments only for `v0` and `v1`, leaving `v2` untouched. Any assignment the wrapper yields can be combined with future reasoning about `v2`.
+`possible_solutions()` now enumerates assignments only for `v0` and `v1`, leaving `v2` untouched. 
 
 
-
-```python
-for sol in pc_partial.possible_solutions():
-    print({var.name: val for var, val in sol.items()})
-
-```
-
-    {'v0': 1, 'v1': 0}
-    {'v0': 0, 'v1': 1}
-
-
-If the constraint later assigns `v2 = 1`, the partial constraint automatically reflects that (because it still references the original constraint) and will show no remaining solutions, signaling that `{v0, v2}` must both be 0.
+If other variables that are part of the constraint but  not part of the partial constraint's context have already been assigned, the partial constraint will automatically reflect only the remaining valid possibilities. So e.g. if `v2 = 1`, then the partial constraint would return a dictionary with only `v0=0` and `v1=0` as a valid possibility.
 
 
 
 ```python
 v2.assign(1)
 print("v2 assigned to 1 -> effective target for subset:", base_constraint.get_effective_target())
-print("Partial solutions now:", list(pc_partial.possible_solutions()))
+print("constraint now:", base_constraint)
+print("Partial solutions now:")
+print_assignments(list(pc_partial.possible_solutions()))
 v2.unassign()  # clean up for future cells
 
 ```
 
     v2 assigned to 1 -> effective target for subset: 0
-    Partial solutions now: [{v0: 0, v1: 0}]
+    constraint now: (v1 + 1 + v0 = 1)
+    Partial solutions now:
+    
+    v0  v1
+    ------
+     0   0
+    
 
 
 ## (3) Constraint integration
 
 So far we have treated constraints one at a time. In this section we'll look at how to handle constraint integration, i.e., when we want to combine the possible solutions implied by multiple constraints. 
 
+
+
+
+```python
+v0, v1, v2 = Variable("v0"), Variable("v1"), Variable("v2")
+c_eq1 = EqualityConstraint({v0, v1, v2}, target=1)
+assignments_full = integrate_new_constraint([], c_eq1)
+print("All assignments for v0 + v1 + v2 = 1:")
+print_assignments(assignments_full)
+
+true_entropy = calculate_joint_entropy(assignments_full)
+print(f"True joint entropy before culling (bits): {true_entropy:.2f}")
+print(f"Complexity before culling (bits): {get_complexity(assignments_full):.2f}")
+
+# Apply a tight capacity so we are forced to forget some assignments
+capacity_bits = 5.0
+assignments_noisy = apply_combinatorial_capacity_noise(assignments_full, capacity_bits)
+print("Post-culling assignments:")
+print_assignments(assignments_noisy)
+
+current_entropy = calculate_joint_entropy(assignments_noisy)
+print(f"Joint entropy after culling (bits): {current_entropy:.2f}")
+print(f"Complexity after culling (bits): {get_complexity(assignments_noisy):.2f}")
+print(f"Information loss (bits): {true_entropy - current_entropy:.2f}")
+```
+
+    All assignments for v0 + v1 + v2 = 1:
+    
+    v0  v1  v2
+    ----------
+     1   0   0
+     0   1   0
+     0   0   1
+    
+    True joint entropy before culling (bits): 1.58
+    Complexity before culling (bits): 5.81
+    Post-culling assignments:
+    
+    v0  v1  v2
+    ----------
+     0   0   1
+     1   0   0
+    
+    Joint entropy after culling (bits): 1.00
+    Complexity after culling (bits): 4.81
+    Information loss (bits): 0.58
+
+
+
+```python
+v0, v1, v2 = Variable("v0"), Variable("v1"), Variable("v2")
+# Start from all assignments satisfying v0 + v1 + v2 = 1
+c_eq1 = EqualityConstraint({v0, v1, v2}, target=1)
+assignments_full = integrate_new_constraint([], c_eq1)
+print("All assignments for v0 + v1 + v2 = 1:")
+print_assignments(assignments_full)
+
+true_entropy = calculate_joint_entropy(assignments_full)
+print(f"True joint entropy before culling (bits): {true_entropy:.2f}")
+print(f"Complexity before culling (bits): {get_complexity(assignments_full):.2f}")
+
+# Apply a tight capacity so we are forced to forget some assignments
+capacity_bits = 5.0
+assignments_noisy = apply_combinatorial_capacity_noise(assignments_full, capacity_bits)
+print("Post-culling assignments:")
+print_assignments(assignments_noisy)
+
+current_entropy = calculate_joint_entropy(assignments_noisy)
+print(f"Joint entropy after culling (bits): {current_entropy:.2f}")
+print(f"Complexity after culling (bits): {get_complexity(assignments_noisy):.2f}")
+print(f"Information loss (bits): {true_entropy - current_entropy:.2f}")
+```
+
+    All assignments for v0 + v1 + v2 = 1:
+    
+    v0  v1  v2
+    ----------
+     1   0   0
+     0   1   0
+     0   0   1
+    
+    True joint entropy before culling (bits): 1.58
+    Complexity before culling (bits): 5.81
+    Post-culling assignments:
+    
+    v0  v1  v2
+    ----------
+     1   0   0
+     0   1   0
+    
+    Joint entropy after culling (bits): 1.00
+    Complexity after culling (bits): 4.81
+    Information loss (bits): 0.58
+
+
+
+```python
+v0, v1, v2 = Variable("v0"), Variable("v1"), Variable("v2")
+c_eq1 = EqualityConstraint({v0, v1, v2}, target=1)
+assignments_full = integrate_new_constraint([], c_eq1)
+print("All assignments for v0 + v1 + v2 = 1:")
+print_assignments(assignments_full)
+
+true_entropy = calculate_joint_entropy(assignments_full)
+print(f"True joint entropy before culling (bits): {true_entropy:.2f}")
+print(f"Complexity before culling (bits): {get_complexity(assignments_full):.2f}")
+
+# Apply a tight capacity so we are forced to forget some assignments
+capacity_bits = 5.0
+assignments_noisy = apply_combinatorial_capacity_noise(assignments_full, capacity_bits)
+print("Post-culling assignments:")
+print_assignments(assignments_noisy)
+
+current_entropy = calculate_joint_entropy(assignments_noisy)
+print(f"Joint entropy after culling (bits): {current_entropy:.2f}")
+print(f"Complexity after culling (bits): {get_complexity(assignments_noisy):.2f}")
+print(f"Information loss (bits): {true_entropy - current_entropy:.2f}")
+```
+
+    All assignments for v0 + v1 + v2 = 1:
+    
+    v0  v1  v2
+    ----------
+     1   0   0
+     0   1   0
+     0   0   1
+    
+    True joint entropy before culling (bits): 1.58
+    Complexity before culling (bits): 5.81
+    Post-culling assignments:
+    
+    v0  v1  v2
+    ----------
+     0   1   0
+     0   0   1
+    
+    Joint entropy after culling (bits): 1.00
+    Complexity after culling (bits): 4.81
+    Information loss (bits): 0.58
 
 
 ### Integration without forgetting
@@ -378,25 +519,32 @@ This is handled by two functions:
 
 
 ```python
-# Example: integrate two simple equality constraints without forgetting
-# Reuse v0, v1, v2 and just clear any previous assignments
-v0.unassign()
-v1.unassign()
-v2.unassign()
+v0, v1, v2 = Variable("v0"), Variable("v1"), Variable("v2")
 
-c1 = EqualityConstraint({v0, v1}, target=1)   # exactly one of v0,v1 is 1
-c2 = EqualityConstraint({v1, v2}, target=1)   # exactly one of v1,v2 is 1
 
-assignments = []
-assignments = integrate_new_constraint(assignments, c1)
-print("After integrating c1 (v0 + v1 = 1):")
-print_assignments(assignments)
+
+c1 = EqualityConstraint({v0, v1}, target=1)   # v0 + v1 = 1
+c2 = EqualityConstraint({v1, v2}, target=1)   # v1 + v2 = 1
+
+print("c1's assignments alone:")
+print_assignments(list( c1.possible_solutions()))
+print("c2's assignments alone:")
+print_assignments(list(c2.possible_solutions()))
+
+
 
 ```
 
-    After integrating c1 (v0 + v1 = 1):
+    c1's assignments alone:
     
     v0  v1
+    ------
+     1   0
+     0   1
+    
+    c2's assignments alone:
+    
+    v1  v2
     ------
      1   0
      0   1
@@ -405,14 +553,16 @@ print_assignments(assignments)
 
 
 ```python
-# Now integrate c2 on top of those assignments
+
+assignments = []
+assignments = integrate_new_constraint(assignments, c1)
 assignments = integrate_new_constraint(assignments, c2)
-print("After integrating c2 (x1 + x2 = 1) as well:")
+print("After integrating c1 and c2 we get:")
 print_assignments(assignments)
 
 ```
 
-    After integrating c2 (x1 + x2 = 1) as well:
+    After integrating c1 and c2 we get:
     
     v0  v1  v2
     ----------
@@ -513,7 +663,7 @@ print(f"Information loss (bits): {true_entropy - current_entropy:.2f}")
     
     v0  v1  v2
     ----------
-     1   0   0
+     0   1   0
      0   0   1
     
     Complexity after culling (bits): 4.81
@@ -624,7 +774,7 @@ print("\nSubproblem value V(IL_budget=2.0):", sub.V(IL_budget))
       IG = 0 IL = 0
     
     After add(c1: v0 + v1 = 1):
-      constraints: [((v0 + v1 = 1), vars={v0,v1})]
+      constraints: [((v1 + v0 = 1), vars={v0,v1})]
       assignments:
     
     v0  v1
@@ -635,7 +785,7 @@ print("\nSubproblem value V(IL_budget=2.0):", sub.V(IL_budget))
       IG = 1.0 IL = 0.0
     
     After add(c2: v1 + v2 = 1):
-      constraints: [((v0 + v1 = 1), vars={v0,v1}), ((v1 + v2 = 1), vars={v1,v2})]
+      constraints: [((v1 + v0 = 1), vars={v0,v1}), ((v1 + v2 = 1), vars={v1,v2})]
       assignments:
     
     v0  v1  v2
@@ -662,19 +812,18 @@ Now we let an `Agent` drive the creation of subproblems. The loop below mirrors 
 ```python
 v0, v1, v2, v3, v4 = Variable("v0"), Variable("v1"), Variable("v2"), Variable("v3"), Variable("v4")
 
-# A small overlapping constraint set
-c1 = EqualityConstraint({v0, v1}, target=1)           # exactly one of v0,v1 is 1
-c2 = EqualityConstraint({v1, v2}, target=1)           # exactly one of v1,v2 is 1
-c3 = EqualityConstraint({v0, v1, v2, v3}, target=2)   # exactly two of v0,v1,v2,v3 are 1
-c4 = EqualityConstraint({v3, v4}, target=1)           # exactly one of v3,v4 is 1
+c1 = EqualityConstraint({v0, v1}, target=1)      # v0 + v1 = 1
+c2 = EqualityConstraint({v1, v2}, target=1)      # v1 + v2 = 1
+c3 = EqualityConstraint({v0, v1, v2, v3}, target=2)   # v0 + v1 + v2 + v3 = 2
+c4 = EqualityConstraint({v3, v4}, target=1)           # v3 + v4 = 1
 
 all_constraints = [c1, c2, c3, c4]
 
 agent = Agent(
     all_constraints,
-    memory_capacity=5,    # tight enough to see some forgetting
-    R_init=1,           # low but non-zero threshold on EDM
-    ILtol_init=2.0,       # tolerate up to ~2 bits of loss per subproblem
+    memory_capacity=5,   #5 bits of memory capacity
+    R_init=1,           # if i don't think i'll make 1 additional deduction next thinking step, stop
+    ILtol_init=2.0,       # tolerate up to 2 bits of loss per subproblem
     max_steps=15
 )
 
@@ -741,25 +890,14 @@ print("\nAgent finished.")
     local IG=0.00, IL=0.00
     constraints in subproblem: []
     assignments:
-    proposal = constraint: (v3 + v0 + v1 + v2 = 2) vars: ['v3', 'v0', 'v2'] decision: ACCEPT contradiction: False
+    proposal = constraint: (v1 + v3 + v2 + v0 = 2) vars: ['v2', 'v3', 'v0', 'v1'] decision: REJECT contradiction: False
     
     --- sub-step 2 ---
     total_steps=1, sub_steps=1
-    R=1.00, ILtol=2.00, EDM=0.047
-    local IG=0.42, IL=0.00
-    constraints in subproblem: [((v3 + v0 + v1 + v2 = 2), vars={v0,v2,v3})]
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=0.00, IL=0.00
+    constraints in subproblem: []
     assignments:
-    
-    v0  v2  v3
-    ----------
-     1   0   0
-     0   1   0
-     0   0   1
-     1   1   0
-     1   0   1
-    
-    (+1 more...)
-    
     Stopping this subproblem because EDM < R.
     No new solved variables from this subproblem.
     Updated global IG_total=0.00, IL_total=0.00
@@ -776,34 +914,14 @@ print("\nAgent finished.")
     local IG=0.00, IL=0.00
     constraints in subproblem: []
     assignments:
-    proposal = constraint: (v3 + v4 = 1) vars: ['v3', 'v4'] decision: ACCEPT contradiction: False
+    proposal = constraint: (v1 + v3 + v2 + v0 = 2) vars: ['v2', 'v3', 'v0', 'v1'] decision: REJECT contradiction: False
     
     --- sub-step 2 ---
     total_steps=2, sub_steps=1
-    R=1.00, ILtol=2.00, EDM=1.000
-    local IG=1.00, IL=0.00
-    constraints in subproblem: [((v3 + v4 = 1), vars={v3,v4})]
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=0.00, IL=0.00
+    constraints in subproblem: []
     assignments:
-    
-    v3  v4
-    ------
-     1   0
-     0   1
-    
-    proposal = constraint: (v3 + v0 + v1 + v2 = 2) vars: ['v0', 'v1', 'v2'] decision: REJECT contradiction: False
-    
-    --- sub-step 3 ---
-    total_steps=3, sub_steps=2
-    R=1.00, ILtol=2.00, EDM=0.500
-    local IG=1.00, IL=0.00
-    constraints in subproblem: [((v3 + v4 = 1), vars={v3,v4})]
-    assignments:
-    
-    v3  v4
-    ------
-     1   0
-     0   1
-    
     Stopping this subproblem because EDM < R.
     No new solved variables from this subproblem.
     Updated global IG_total=0.00, IL_total=0.00
@@ -815,18 +933,18 @@ print("\nAgent finished.")
     ======================================================================
     
     --- sub-step 1 ---
-    total_steps=3, sub_steps=0
+    total_steps=2, sub_steps=0
     R=1.00, ILtol=2.00, EDM=0.000
     local IG=0.00, IL=0.00
     constraints in subproblem: []
     assignments:
-    proposal = constraint: (v0 + v1 = 1) vars: ['v0', 'v1'] decision: ACCEPT contradiction: False
+    proposal = constraint: (v1 + v0 = 1) vars: ['v1', 'v0'] decision: ACCEPT contradiction: False
     
     --- sub-step 2 ---
-    total_steps=4, sub_steps=1
+    total_steps=3, sub_steps=1
     R=1.00, ILtol=2.00, EDM=1.000
     local IG=1.00, IL=0.00
-    constraints in subproblem: [((v0 + v1 = 1), vars={v0,v1})]
+    constraints in subproblem: [((v1 + v0 = 1), vars={v0,v1})]
     assignments:
     
     v0  v1
@@ -837,10 +955,10 @@ print("\nAgent finished.")
     proposal = constraint: (v1 + v2 = 1) vars: ['v2'] decision: ACCEPT contradiction: False
     
     --- sub-step 3 ---
-    total_steps=5, sub_steps=2
+    total_steps=4, sub_steps=2
     R=1.00, ILtol=2.00, EDM=1.125
     local IG=2.00, IL=0.00
-    constraints in subproblem: [((v0 + v1 = 1), vars={v0,v1}), ((v1 + v2 = 1), vars={v2})]
+    constraints in subproblem: [((v1 + v0 = 1), vars={v0,v1}), ((v1 + v2 = 1), vars={v2})]
     assignments:
     
     v0  v1  v2
@@ -848,50 +966,50 @@ print("\nAgent finished.")
      0   1   0
      1   0   1
     
-    proposal = constraint: (v3 + v0 + v1 + v2 = 2) vars: ['v3'] decision: ACCEPT contradiction: False
+    proposal = constraint: (v1 + v3 + v2 + v0 = 2) vars: ['v3'] decision: ACCEPT contradiction: False
     
     --- sub-step 4 ---
-    total_steps=6, sub_steps=3
+    total_steps=5, sub_steps=3
     R=1.00, ILtol=2.00, EDM=0.000
     local IG=4.00, IL=1.00
-    constraints in subproblem: [((v0 + v1 = 1), vars={v0,v1}), ((v1 + v2 = 1), vars={v2}), ((v3 + v0 + v1 + v2 = 2), vars={v3})]
+    constraints in subproblem: [((v1 + v0 = 1), vars={v0,v1}), ((v1 + v2 = 1), vars={v2}), ((v1 + v3 + v2 + v0 = 2), vars={v3})]
     assignments:
     
     v0  v1  v2  v3
     --------------
-     0   1   0   1
+     1   0   1   0
     
     Stopping this subproblem because EDM < R.
-    Newly marked solved variables: {'v0': 0, 'v1': 1, 'v2': 0, 'v3': 1}
+    Newly marked solved variables: {'v1': 0, 'v0': 1, 'v2': 1, 'v3': 0}
     Updated global IG_total=4.00, IL_total=1.00
     
     ======================================================================
     NEW SUBPROBLEM 4
     global IG_total=4.00, IL_total=1.00
-    globally solved vars: {'v3': 1, 'v0': 0, 'v1': 1, 'v2': 0}
+    globally solved vars: {'v1': 0, 'v3': 0, 'v2': 1, 'v0': 1}
     ======================================================================
     
     --- sub-step 1 ---
-    total_steps=6, sub_steps=0
+    total_steps=5, sub_steps=0
     R=1.00, ILtol=2.00, EDM=0.000
     local IG=0.00, IL=0.00
     constraints in subproblem: []
     assignments:
-    proposal = constraint: (1 + v4 = 1) vars: ['v4'] decision: ACCEPT contradiction: False
+    proposal = constraint: (v4 + 0 = 1) vars: ['v4'] decision: ACCEPT contradiction: False
     
     --- sub-step 2 ---
-    total_steps=7, sub_steps=1
+    total_steps=6, sub_steps=1
     R=1.00, ILtol=2.00, EDM=0.000
     local IG=1.00, IL=0.00
-    constraints in subproblem: [((1 + v4 = 1), vars={v4})]
+    constraints in subproblem: [((v4 + 0 = 1), vars={v4})]
     assignments:
     
     v4
     --
-     0
+     1
     
     Stopping this subproblem because EDM < R.
-    Newly marked solved variables: {'v4': 0}
+    Newly marked solved variables: {'v4': 1}
     Updated global IG_total=5.00, IL_total=1.00
     
     Agent finished.
