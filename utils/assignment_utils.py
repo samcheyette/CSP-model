@@ -97,6 +97,9 @@ def get_variable_counts(assignments):
 
     return values
 
+
+
+
 def get_variable_probabilities(assignments):
     counts = get_variable_counts(assignments)
     probabilities = {}

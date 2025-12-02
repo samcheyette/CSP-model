@@ -2,10 +2,10 @@ from itertools import combinations, product
 from collections import defaultdict
 from re import A
 from typing import Dict, Set, Iterator, Tuple, List, Any
-from models.CSP_working_model.grammar import Expression, Variable, Sum, Number, GreaterThan, LessThan
+from grammar import Expression, Variable, Sum, Number, GreaterThan, LessThan
 from math import comb
 # from utils.utils import *
-from models.CSP_working_model.utils.assignment_utils import *
+from utils.assignment_utils import *
 
 import random
 from collections import defaultdict

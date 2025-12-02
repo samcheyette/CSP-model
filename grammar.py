@@ -584,17 +584,3 @@ if __name__ == "__main__":
     S = Sum(v0, v1, v2, v3)
 
     eq = Equals(S, Number(2))
-
-
-    # Additional tests for other expressions
-    # eq = And(v0 + v1 == 1, v0 + v2 == 1)
-
-
-    # print(eq)
-
-    # vars_list = [v0, v1, v2]
-
-    # print("\nEquation Consistency Tests:")
-    # for bits in product([0, 1], repeat=len(vars_list)):
-    #     assignment = {var: bit for var, bit in zip(vars_list, bits)}
-    #     print(f"Assignment {assignment}, eq is consistent: {eq.is_consistent(assignment)}")

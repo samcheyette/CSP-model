@@ -4,7 +4,8 @@ There are a few key pieces of the model:
 - Variables (grammar.py)
 - Constraints (constraints.py)
 - Constraint integration & forgetting (utils/assignment_utils.py mostly)
-- Agent (agent.py)
+- Turning games into CSPs, and motivation for model
+- Agent model (agent.py)
 
 
 
@@ -15,7 +16,7 @@ import sys, os
 
 project_root = Path.cwd().resolve()
 if str(project_root) not in sys.path:
-    sys.path.append(str(project_root))
+    sys.path.insert(0, str(project_root))
 
 from grammar import Variable, Sum, Number
 from constraints import EqualityConstraint, PartialConstraint
@@ -86,7 +87,7 @@ print("\nAfter v1.assign(1), expression prints as:", S)   # (v0 + 1 + v2)
 ```
 
     Expression: (v0 + v1 + v2)
-    Variables: {'v1', 'v2', 'v0'}
+    Variables: {'v0', 'v2', 'v1'}
     
     Partial assignment: {'v0': 1, 'v2': 0}
     S.evaluate(partial): 1
@@ -153,7 +154,7 @@ print_assignments(solutions)
 
 ```
 
-    Constraint: (v1 + v2 + v0 = 2)
+    Constraint: (v0 + v2 + v1 = 2)
     Contradiction?: False
     
     Variable assignments:
@@ -189,7 +190,7 @@ v0.unassign() #undoes mutation to v0
 
     
     After assigning v0 = 1...
-    Constraint now prints as: (v1 + v2 + 1 = 2)
+    Constraint now prints as: (1 + v2 + v1 = 2)
     Effective target: 1
     Contradiction?: False
     
@@ -248,7 +249,7 @@ print("Contradiction?:", constraint.test_contradiction())
 
 ```
 
-    (v1 + v2 + v0 = 1)
+    (v0 + v2 + v1 = 1)
     Contradiction?: False
 
 
@@ -283,7 +284,7 @@ print("Contradiction?:", constraint.test_contradiction())
 
 ```
 
-    Released vars: {'v1', 'v0'}
+    Released vars: {'v0', 'v1'}
     Current values: None None 0
     Contradiction?: False
 
@@ -306,7 +307,7 @@ print(base_constraint)
 
 ```
 
-    (v1 + v2 + v0 = 1)
+    (v0 + v2 + v1 = 1)
 
 
 Wrap it with `PartialConstraint`, which simplifies it to only consider valid possibilities containing `{v0, v1}`. 
@@ -320,7 +321,7 @@ print_assignments(list(pc_partial.possible_solutions()))
 
 ```
 
-    ((v1 + v2 + v0 = 1), vars={v0,v1})
+    ((v0 + v2 + v1 = 1), vars={v0,v1})
     
     v0  v1
     ------
@@ -348,7 +349,7 @@ v2.unassign()  # clean up for future cells
 ```
 
     v2 assigned to 1 -> effective target for subset: 0
-    constraint now: (v1 + 1 + v0 = 1)
+    constraint now: (v0 + 1 + v1 = 1)
     Partial solutions now:
     
     v0  v1
@@ -401,8 +402,8 @@ print(f"Information loss (bits): {true_entropy - current_entropy:.2f}")
     
     v0  v1  v2
     ----------
-     0   0   1
      1   0   0
+     0   0   1
     
     Joint entropy after culling (bits): 1.00
     Complexity after culling (bits): 4.81
@@ -448,8 +449,8 @@ print(f"Information loss (bits): {true_entropy - current_entropy:.2f}")
     
     v0  v1  v2
     ----------
-     1   0   0
      0   1   0
+     1   0   0
     
     Joint entropy after culling (bits): 1.00
     Complexity after culling (bits): 4.81
@@ -495,7 +496,7 @@ print(f"Information loss (bits): {true_entropy - current_entropy:.2f}")
     v0  v1  v2
     ----------
      0   1   0
-     0   0   1
+     1   0   0
     
     Joint entropy after culling (bits): 1.00
     Complexity after culling (bits): 4.81
@@ -664,14 +665,170 @@ print(f"Information loss (bits): {true_entropy - current_entropy:.2f}")
     v0  v1  v2
     ----------
      0   1   0
-     0   0   1
+     1   0   0
     
     Complexity after culling (bits): 4.81
     Joint entropy after culling (bits): 1.00
     Information loss (bits): 0.58
 
 
-## (4) Agent
+## (4) Motivating a memory-bounded model
+
+
+Before we even get into the model details, it's useful to discuss two things: 1) how to encode a game like Minesweeper in terms of the constraints/variables we've defined; and 2) what would happen if you naively just evaluated the constraints to reach a solution. 
+
+
+
+
+```python
+# Utilities for visualizing Minesweeper as a CSP
+import numpy as np
+import matplotlib.pyplot as plt
+
+from csp_games.minesweeper import load_stimuli, board_to_constraints
+from animations.minesweeper_animations import render_game_state
+from animations.constraint_system_to_graph import build_csp_graph, draw_csp_graph
+
+
+```
+
+
+```python
+minesweeper_boards = load_stimuli("csp_games/puzzles/minesweeper_5x5_hard.json")
+board = minesweeper_boards[-1]
+
+render_game_state(board)
+```
+
+    csp_games/puzzles/minesweeper_5x5_hard.json
+
+
+
+
+
+    
+![png](README_files/README_41_1.png)
+    
+
+
+
+The panel above shows a single Minesweeper board. This is the raw input that we will turn into a collection of local equality constraints.
+
+
+
+```python
+# Turn the board into local equality constraints
+constraints = board_to_constraints(board)
+
+all_vars = set().union(*[c.get_variables() for c in constraints])
+print(f"Number of variables: {len(all_vars)}")
+print(f"Number of constraints: {len(constraints)}\n")
+
+print("Constraints:")
+for c in constraints[:8]:
+    print(" ", c)
+print("  ...")
+
+```
+
+    Number of variables: 13
+    Number of constraints: 11
+    
+    Constraints:
+      (v_0_2 = 1)
+      (v_0_2 + v_0_4 + v_1_3 = 2)
+      (v_2_0 + v_2_1 = 1)
+      (v_2_0 + v_0_2 + v_2_2 + v_2_1 = 2)
+      (v_2_2 + v_0_2 + v_1_3 + v_2_1 = 2)
+      (v_0_4 + v_2_4 + v_1_3 = 1)
+      (v_2_2 + v_3_4 + v_2_4 + v_1_3 = 2)
+      (v_4_1 + v_2_0 + v_4_2 + v_3_0 + v_4_0 + v_2_2 + v_2_1 = 3)
+      ...
+
+
+We can now re-draw these "minesweeper" constraints in a universal format that applies to any and all constraint satisfaction problem: a constraint graph. 
+
+Below we can see the same board in CSP-graph format, where:
+- Blue circular nodes correspond to latent binary variables (potential mine locations).
+- Gray square nodes correspond to equality constraints induced by the numbered clues.
+- An edge connects a variable to a constraint whenever that variable appears in the constraint.
+
+
+
+```python
+
+fig, (ax_board, ax_graph) = plt.subplots(1, 2, figsize=(9, 4))
+
+img = render_game_state(board)
+ax_board.imshow(img)
+ax_board.set_title("Minesweeper board")
+ax_board.axis("off")
+
+vars_for_graph = set().union(*[c.get_variables() for c in constraints])
+G = build_csp_graph(vars_for_graph, constraints)
+
+draw_csp_graph(G, ax=ax_graph, use_board_coords=True, node_size=325, lw=0.8)
+ax_graph.set_title("Constraint graph")
+
+plt.tight_layout()
+```
+
+
+    
+![png](README_files/README_45_0.png)
+    
+
+
+Okay, now, why don't we just look at each piece of information (i.e., a constraint) in turn and fully consider its implications? Well, in the graph below we can see what would happen if we tried to do this even on a tiny 5x5 board: the complexity of the solution space becomes unmanagably large, fast. 
+
+
+```python
+
+import random
+
+n_runs = 100
+n_constraints = len(constraints)
+complexity_trajectories = np.zeros((n_runs, n_constraints+1))
+
+for run in range(n_runs):
+    shuffled = list(constraints)
+    random.shuffle(shuffled)
+    assignments = []
+    for i, c in enumerate(shuffled):
+        assignments = integrate_new_constraint(assignments, c)
+        bits = get_complexity(assignments)
+        complexity_trajectories[run, i+1] = bits
+
+avg_complexity = complexity_trajectories.mean(axis=0)
+
+
+x = np.arange(1, len(avg_complexity) + 1)
+
+plt.figure(figsize=(6, 4))
+plt.plot(x, avg_complexity, marker='o', linewidth=1)
+plt.xlabel("Constraint index in random order")
+plt.ylabel("Average complexity (bits)")
+plt.title("Average assignment-set complexity vs. constraint index")
+plt.grid(False)
+plt.tight_layout()
+plt.show()
+
+
+```
+
+
+    
+![png](README_files/README_47_0.png)
+    
+
+
+Even for this small board, the plot above shows that integrating constraints in a random order typically drives the assignment set to **high complexity** after just a handful of steps, before eventually settling back down as the solution space narrows.
+
+Random orderings differ in which constraints explode the space first, but on average the system quickly reaches a regime where storing all consistent assignments is extremely expensive. So people cannot handle even the joint implications of each constraint in a 5x5 minesweeper board - no way. 
+
+Our model, which is described below, is aimed at explaining how a person with 10-15 bits of working memory might iteratively chip away at the problem by slowly expanding subproblems (local patches of the board), not allowing the memory demands to grow to intractable levels, and moving on to new problems when the current subproblem does not seem tractable given your memory limits.
+
+## (5) Agent
 
 The `Agent` builds and evaluate a **sequences of subproblems** out of a set of constraints, iteratively externalizing its (not always correct) deductions as it goes.
 
@@ -682,7 +839,7 @@ The `Agent` builds and evaluate a **sequences of subproblems** out of a set of c
   - `information_gain_total` / `information_loss_total`: cumulative bits of uncertainty removed vs. bits discarded by forgetting.
   - `total_steps`: how many proposal steps it has taken overall.
 - On each proposal step, the agent:
-  1. **Samples a new constraint** (respecting locality if `enforce_locality=True`), and a subset of its unassigned variables.
+  1. **Samples a new constraint** and a subset of its unassigned variables.
   2. Uses `SubProblem.add(...)` to tentatively extend the current subproblem and recompute its assignments, IG, and IL under the current `memory_capacity`.
   3. Compares the new subproblem’s value `V(ILtol_current)` to the old one and **accepts or rejects** the proposal accordingly.
 - The top-level loop:
@@ -774,7 +931,7 @@ print("\nSubproblem value V(IL_budget=2.0):", sub.V(IL_budget))
       IG = 0 IL = 0
     
     After add(c1: v0 + v1 = 1):
-      constraints: [((v1 + v0 = 1), vars={v0,v1})]
+      constraints: [((v0 + v1 = 1), vars={v0,v1})]
       assignments:
     
     v0  v1
@@ -785,7 +942,7 @@ print("\nSubproblem value V(IL_budget=2.0):", sub.V(IL_budget))
       IG = 1.0 IL = 0.0
     
     After add(c2: v1 + v2 = 1):
-      constraints: [((v1 + v0 = 1), vars={v0,v1}), ((v1 + v2 = 1), vars={v1,v2})]
+      constraints: [((v0 + v1 = 1), vars={v0,v1}), ((v2 + v1 = 1), vars={v1,v2})]
       assignments:
     
     v0  v1  v2
@@ -808,23 +965,22 @@ Now we let an `Agent` drive the creation of subproblems. The loop below mirrors 
 - After each subproblem, it **marks solved variables** and updates global `information_gain_total` and `information_loss_total` before moving on to the next subproblem.
 
 
+Below, we run a model loop on the small minesweeper board we saw above.
+
+
 
 ```python
-v0, v1, v2, v3, v4 = Variable("v0"), Variable("v1"), Variable("v2"), Variable("v3"), Variable("v4")
+minesweeper_boards = load_stimuli("csp_games/puzzles/minesweeper_5x5_hard.json")
+board = minesweeper_boards[-1]
 
-c1 = EqualityConstraint({v0, v1}, target=1)      # v0 + v1 = 1
-c2 = EqualityConstraint({v1, v2}, target=1)      # v1 + v2 = 1
-c3 = EqualityConstraint({v0, v1, v2, v3}, target=2)   # v0 + v1 + v2 + v3 = 2
-c4 = EqualityConstraint({v3, v4}, target=1)           # v3 + v4 = 1
-
-all_constraints = [c1, c2, c3, c4]
+constraints = board_to_constraints(board)
 
 agent = Agent(
-    all_constraints,
-    memory_capacity=5,   #5 bits of memory capacity
+    constraints,
+    memory_capacity=8,   #8 bits of memory capacity
     R_init=1,           # if i don't think i'll make 1 additional deduction next thinking step, stop
     ILtol_init=2.0,       # tolerate up to 2 bits of loss per subproblem
-    max_steps=15
+    max_steps=150
 )
 
 subproblem_index = 0
@@ -877,6 +1033,7 @@ print("\nAgent finished.")
 
 ```
 
+    csp_games/puzzles/minesweeper_5x5_hard.json
     
     ======================================================================
     NEW SUBPROBLEM 1
@@ -890,7 +1047,7 @@ print("\nAgent finished.")
     local IG=0.00, IL=0.00
     constraints in subproblem: []
     assignments:
-    proposal = constraint: (v1 + v3 + v2 + v0 = 2) vars: ['v2', 'v3', 'v0', 'v1'] decision: REJECT contradiction: False
+    proposal = constraint: (v_2_0 + v_2_1 = 1) vars: ['v_2_1'] decision: REJECT contradiction: False
     
     --- sub-step 2 ---
     total_steps=1, sub_steps=1
@@ -914,7 +1071,7 @@ print("\nAgent finished.")
     local IG=0.00, IL=0.00
     constraints in subproblem: []
     assignments:
-    proposal = constraint: (v1 + v3 + v2 + v0 = 2) vars: ['v2', 'v3', 'v0', 'v1'] decision: REJECT contradiction: False
+    proposal = constraint: (v_4_3 + v_4_1 + v_2_2 + v_4_2 + v_2_1 = 2) vars: ['v_4_3', 'v_2_2', 'v_2_1', 'v_4_1', 'v_4_2'] decision: REJECT contradiction: False
     
     --- sub-step 2 ---
     total_steps=2, sub_steps=1
@@ -938,55 +1095,73 @@ print("\nAgent finished.")
     local IG=0.00, IL=0.00
     constraints in subproblem: []
     assignments:
-    proposal = constraint: (v1 + v0 = 1) vars: ['v1', 'v0'] decision: ACCEPT contradiction: False
+    proposal = constraint: (v_2_2 + v_3_4 + v_2_4 + v_1_3 = 2) vars: ['v_2_2', 'v_3_4', 'v_2_4', 'v_1_3'] decision: ACCEPT contradiction: False
     
     --- sub-step 2 ---
     total_steps=3, sub_steps=1
-    R=1.00, ILtol=2.00, EDM=1.000
-    local IG=1.00, IL=0.00
-    constraints in subproblem: [((v1 + v0 = 1), vars={v0,v1})]
+    R=1.00, ILtol=2.00, EDM=1.750
+    local IG=3.00, IL=1.58
+    constraints in subproblem: [((v_2_2 + v_3_4 + v_2_4 + v_1_3 = 2), vars={v_1_3,v_2_2,v_2_4,v_3_4})]
     assignments:
     
-    v0  v1
-    ------
-     1   0
-     0   1
+    v_1_3  v_2_2  v_2_4  v_3_4
+    --------------------------
+        1      0      1      0
+        0      0      1      1
     
-    proposal = constraint: (v1 + v2 = 1) vars: ['v2'] decision: ACCEPT contradiction: False
+    proposal = constraint: (v_4_3 + v_3_4 = 1) vars: [] decision: REJECT contradiction: False
     
     --- sub-step 3 ---
     total_steps=4, sub_steps=2
-    R=1.00, ILtol=2.00, EDM=1.125
-    local IG=2.00, IL=0.00
-    constraints in subproblem: [((v1 + v0 = 1), vars={v0,v1}), ((v1 + v2 = 1), vars={v2})]
+    R=1.00, ILtol=2.00, EDM=0.875
+    local IG=3.00, IL=1.58
+    constraints in subproblem: [((v_2_2 + v_3_4 + v_2_4 + v_1_3 = 2), vars={v_1_3,v_2_2,v_2_4,v_3_4})]
     assignments:
     
-    v0  v1  v2
-    ----------
-     0   1   0
-     1   0   1
-    
-    proposal = constraint: (v1 + v3 + v2 + v0 = 2) vars: ['v3'] decision: ACCEPT contradiction: False
-    
-    --- sub-step 4 ---
-    total_steps=5, sub_steps=3
-    R=1.00, ILtol=2.00, EDM=0.000
-    local IG=4.00, IL=1.00
-    constraints in subproblem: [((v1 + v0 = 1), vars={v0,v1}), ((v1 + v2 = 1), vars={v2}), ((v1 + v3 + v2 + v0 = 2), vars={v3})]
-    assignments:
-    
-    v0  v1  v2  v3
-    --------------
-     1   0   1   0
+    v_1_3  v_2_2  v_2_4  v_3_4
+    --------------------------
+        1      0      1      0
+        0      0      1      1
     
     Stopping this subproblem because EDM < R.
-    Newly marked solved variables: {'v1': 0, 'v0': 1, 'v2': 1, 'v3': 0}
-    Updated global IG_total=4.00, IL_total=1.00
+    Newly marked solved variables: {'v_2_2': 0, 'v_2_4': 1}
+    Updated global IG_total=2.00, IL_total=0.79
     
     ======================================================================
     NEW SUBPROBLEM 4
-    global IG_total=4.00, IL_total=1.00
-    globally solved vars: {'v1': 0, 'v3': 0, 'v2': 1, 'v0': 1}
+    global IG_total=2.00, IL_total=0.79
+    globally solved vars: {'v_2_2': 0, 'v_2_4': 1}
+    ======================================================================
+    
+    --- sub-step 1 ---
+    total_steps=4, sub_steps=0
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=0.00, IL=0.00
+    constraints in subproblem: []
+    assignments:
+    proposal = constraint: (v_4_3 + v_3_4 + 1 + 0 + v_4_2 = 2) vars: ['v_4_3', 'v_4_2'] decision: ACCEPT contradiction: False
+    
+    --- sub-step 2 ---
+    total_steps=5, sub_steps=1
+    R=1.00, ILtol=2.00, EDM=0.375
+    local IG=0.42, IL=0.00
+    constraints in subproblem: [((v_4_3 + v_3_4 + 1 + 0 + v_4_2 = 2), vars={v_4_2,v_4_3})]
+    assignments:
+    
+    v_4_2  v_4_3
+    ------------
+        0      0
+        1      0
+        0      1
+    
+    Stopping this subproblem because EDM < R.
+    No new solved variables from this subproblem.
+    Updated global IG_total=2.00, IL_total=0.79
+    
+    ======================================================================
+    NEW SUBPROBLEM 5
+    global IG_total=2.00, IL_total=0.79
+    globally solved vars: {'v_2_2': 0, 'v_2_4': 1}
     ======================================================================
     
     --- sub-step 1 ---
@@ -995,22 +1170,386 @@ print("\nAgent finished.")
     local IG=0.00, IL=0.00
     constraints in subproblem: []
     assignments:
-    proposal = constraint: (v4 + 0 = 1) vars: ['v4'] decision: ACCEPT contradiction: False
+    proposal = constraint: (0 + v_0_2 + v_1_3 + v_2_1 = 2) vars: ['v_1_3', 'v_2_1'] decision: ACCEPT contradiction: False
     
     --- sub-step 2 ---
     total_steps=6, sub_steps=1
-    R=1.00, ILtol=2.00, EDM=0.000
-    local IG=1.00, IL=0.00
-    constraints in subproblem: [((v4 + 0 = 1), vars={v4})]
+    R=1.00, ILtol=2.00, EDM=0.375
+    local IG=0.42, IL=0.00
+    constraints in subproblem: [((0 + v_0_2 + v_1_3 + v_2_1 = 2), vars={v_1_3,v_2_1})]
     assignments:
     
-    v4
-    --
-     1
+    v_1_3  v_2_1
+    ------------
+        1      0
+        0      1
+        1      1
     
     Stopping this subproblem because EDM < R.
-    Newly marked solved variables: {'v4': 1}
-    Updated global IG_total=5.00, IL_total=1.00
+    No new solved variables from this subproblem.
+    Updated global IG_total=2.00, IL_total=0.79
+    
+    ======================================================================
+    NEW SUBPROBLEM 6
+    global IG_total=2.00, IL_total=0.79
+    globally solved vars: {'v_2_2': 0, 'v_2_4': 1}
+    ======================================================================
+    
+    --- sub-step 1 ---
+    total_steps=6, sub_steps=0
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=0.00, IL=0.00
+    constraints in subproblem: []
+    assignments:
+    proposal = constraint: (v_2_0 + v_0_2 + 0 + v_2_1 = 2) vars: ['v_2_0'] decision: REJECT contradiction: False
+    
+    --- sub-step 2 ---
+    total_steps=7, sub_steps=1
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=0.00, IL=0.00
+    constraints in subproblem: []
+    assignments:
+    Stopping this subproblem because EDM < R.
+    No new solved variables from this subproblem.
+    Updated global IG_total=2.00, IL_total=0.79
+    
+    ======================================================================
+    NEW SUBPROBLEM 7
+    global IG_total=2.00, IL_total=0.79
+    globally solved vars: {'v_2_2': 0, 'v_2_4': 1}
+    ======================================================================
+    
+    --- sub-step 1 ---
+    total_steps=7, sub_steps=0
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=0.00, IL=0.00
+    constraints in subproblem: []
+    assignments:
+    proposal = constraint: (v_2_0 + v_2_1 = 1) vars: ['v_2_1'] decision: REJECT contradiction: False
+    
+    --- sub-step 2 ---
+    total_steps=8, sub_steps=1
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=0.00, IL=0.00
+    constraints in subproblem: []
+    assignments:
+    Stopping this subproblem because EDM < R.
+    No new solved variables from this subproblem.
+    Updated global IG_total=2.00, IL_total=0.79
+    
+    ======================================================================
+    NEW SUBPROBLEM 8
+    global IG_total=2.00, IL_total=0.79
+    globally solved vars: {'v_2_2': 0, 'v_2_4': 1}
+    ======================================================================
+    
+    --- sub-step 1 ---
+    total_steps=8, sub_steps=0
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=0.00, IL=0.00
+    constraints in subproblem: []
+    assignments:
+    proposal = constraint: (v_2_0 + v_0_2 + 0 + v_2_1 = 2) vars: ['v_2_0'] decision: REJECT contradiction: False
+    
+    --- sub-step 2 ---
+    total_steps=9, sub_steps=1
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=0.00, IL=0.00
+    constraints in subproblem: []
+    assignments:
+    Stopping this subproblem because EDM < R.
+    No new solved variables from this subproblem.
+    Updated global IG_total=2.00, IL_total=0.79
+    
+    ======================================================================
+    NEW SUBPROBLEM 9
+    global IG_total=2.00, IL_total=0.79
+    globally solved vars: {'v_2_2': 0, 'v_2_4': 1}
+    ======================================================================
+    
+    --- sub-step 1 ---
+    total_steps=9, sub_steps=0
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=0.00, IL=0.00
+    constraints in subproblem: []
+    assignments:
+    proposal = constraint: (v_4_3 + v_3_4 + 1 + 0 + v_4_2 = 2) vars: ['v_4_3'] decision: REJECT contradiction: False
+    
+    --- sub-step 2 ---
+    total_steps=10, sub_steps=1
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=0.00, IL=0.00
+    constraints in subproblem: []
+    assignments:
+    Stopping this subproblem because EDM < R.
+    No new solved variables from this subproblem.
+    Updated global IG_total=2.00, IL_total=0.79
+    
+    ======================================================================
+    NEW SUBPROBLEM 10
+    global IG_total=2.00, IL_total=0.79
+    globally solved vars: {'v_2_2': 0, 'v_2_4': 1}
+    ======================================================================
+    
+    --- sub-step 1 ---
+    total_steps=10, sub_steps=0
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=0.00, IL=0.00
+    constraints in subproblem: []
+    assignments:
+    proposal = constraint: (v_0_4 + 1 + v_1_3 = 1) vars: ['v_0_4'] decision: ACCEPT contradiction: False
+    
+    --- sub-step 2 ---
+    total_steps=11, sub_steps=1
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=1.00, IL=0.00
+    constraints in subproblem: [((v_0_4 + 1 + v_1_3 = 1), vars={v_0_4})]
+    assignments:
+    
+    v_0_4
+    -----
+        0
+    
+    Stopping this subproblem because EDM < R.
+    Newly marked solved variables: {'v_0_4': 0}
+    Updated global IG_total=3.00, IL_total=0.79
+    
+    ======================================================================
+    NEW SUBPROBLEM 11
+    global IG_total=3.00, IL_total=0.79
+    globally solved vars: {'v_2_2': 0, 'v_0_4': 0, 'v_2_4': 1}
+    ======================================================================
+    
+    --- sub-step 1 ---
+    total_steps=11, sub_steps=0
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=0.00, IL=0.00
+    constraints in subproblem: []
+    assignments:
+    proposal = constraint: (v_0_2 + 0 + v_1_3 = 2) vars: ['v_0_2', 'v_1_3'] decision: ACCEPT contradiction: False
+    
+    --- sub-step 2 ---
+    total_steps=12, sub_steps=1
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=2.00, IL=0.00
+    constraints in subproblem: [((v_0_2 + 0 + v_1_3 = 2), vars={v_0_2,v_1_3})]
+    assignments:
+    
+    v_0_2  v_1_3
+    ------------
+        1      1
+    
+    Stopping this subproblem because EDM < R.
+    Newly marked solved variables: {'v_0_2': 1, 'v_1_3': 1}
+    Updated global IG_total=5.00, IL_total=0.79
+    
+    ======================================================================
+    NEW SUBPROBLEM 12
+    global IG_total=5.00, IL_total=0.79
+    globally solved vars: {'v_0_2': 1, 'v_2_2': 0, 'v_0_4': 0, 'v_1_3': 1, 'v_2_4': 1}
+    ======================================================================
+    
+    --- sub-step 1 ---
+    total_steps=12, sub_steps=0
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=0.00, IL=0.00
+    constraints in subproblem: []
+    assignments:
+    proposal = constraint: (v_2_0 + v_2_1 = 1) vars: ['v_2_0', 'v_2_1'] decision: ACCEPT contradiction: False
+    
+    --- sub-step 2 ---
+    total_steps=13, sub_steps=1
+    R=1.00, ILtol=2.00, EDM=1.000
+    local IG=1.00, IL=0.00
+    constraints in subproblem: [((v_2_0 + v_2_1 = 1), vars={v_2_0,v_2_1})]
+    assignments:
+    
+    v_2_0  v_2_1
+    ------------
+        1      0
+        0      1
+    
+    proposal = constraint: (v_4_3 + v_4_1 + 0 + v_4_2 + v_2_1 = 2) vars: ['v_4_3', 'v_4_2'] decision: ACCEPT contradiction: False
+    
+    --- sub-step 3 ---
+    total_steps=14, sub_steps=2
+    R=1.00, ILtol=2.00, EDM=0.438
+    local IG=3.00, IL=1.58
+    constraints in subproblem: [((v_2_0 + v_2_1 = 1), vars={v_2_0,v_2_1}), ((v_4_3 + v_4_1 + 0 + v_4_2 + v_2_1 = 2), vars={v_4_2,v_4_3})]
+    assignments:
+    
+    v_2_0  v_2_1  v_4_2  v_4_3
+    --------------------------
+        1      0      1      0
+        1      0      1      1
+    
+    Stopping this subproblem because EDM < R.
+    Newly marked solved variables: {'v_2_0': 1, 'v_2_1': 0, 'v_4_2': 1}
+    Updated global IG_total=8.00, IL_total=1.98
+    
+    ======================================================================
+    NEW SUBPROBLEM 13
+    global IG_total=8.00, IL_total=1.98
+    globally solved vars: {'v_0_2': 1, 'v_2_2': 0, 'v_2_0': 1, 'v_0_4': 0, 'v_1_3': 1, 'v_2_1': 0, 'v_2_4': 1, 'v_4_2': 1}
+    ======================================================================
+    
+    --- sub-step 1 ---
+    total_steps=14, sub_steps=0
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=0.00, IL=0.00
+    constraints in subproblem: []
+    assignments:
+    proposal = constraint: (v_4_3 + v_4_1 + 0 + 1 + 0 = 2) vars: ['v_4_1'] decision: REJECT contradiction: False
+    
+    --- sub-step 2 ---
+    total_steps=15, sub_steps=1
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=0.00, IL=0.00
+    constraints in subproblem: []
+    assignments:
+    Stopping this subproblem because EDM < R.
+    No new solved variables from this subproblem.
+    Updated global IG_total=8.00, IL_total=1.98
+    
+    ======================================================================
+    NEW SUBPROBLEM 14
+    global IG_total=8.00, IL_total=1.98
+    globally solved vars: {'v_0_2': 1, 'v_2_2': 0, 'v_2_0': 1, 'v_0_4': 0, 'v_1_3': 1, 'v_2_1': 0, 'v_2_4': 1, 'v_4_2': 1}
+    ======================================================================
+    
+    --- sub-step 1 ---
+    total_steps=15, sub_steps=0
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=0.00, IL=0.00
+    constraints in subproblem: []
+    assignments:
+    proposal = constraint: (v_4_3 + v_4_1 + 0 + 1 + 0 = 2) vars: ['v_4_3'] decision: REJECT contradiction: False
+    
+    --- sub-step 2 ---
+    total_steps=16, sub_steps=1
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=0.00, IL=0.00
+    constraints in subproblem: []
+    assignments:
+    Stopping this subproblem because EDM < R.
+    No new solved variables from this subproblem.
+    Updated global IG_total=8.00, IL_total=1.98
+    
+    ======================================================================
+    NEW SUBPROBLEM 15
+    global IG_total=8.00, IL_total=1.98
+    globally solved vars: {'v_0_2': 1, 'v_2_2': 0, 'v_2_0': 1, 'v_0_4': 0, 'v_1_3': 1, 'v_2_1': 0, 'v_2_4': 1, 'v_4_2': 1}
+    ======================================================================
+    
+    --- sub-step 1 ---
+    total_steps=16, sub_steps=0
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=0.00, IL=0.00
+    constraints in subproblem: []
+    assignments:
+    proposal = constraint: (v_4_3 + v_3_4 + 1 + 0 + 1 = 2) vars: ['v_4_3', 'v_3_4'] decision: ACCEPT contradiction: False
+    
+    --- sub-step 2 ---
+    total_steps=17, sub_steps=1
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=2.00, IL=0.00
+    constraints in subproblem: [((v_4_3 + v_3_4 + 1 + 0 + 1 = 2), vars={v_3_4,v_4_3})]
+    assignments:
+    
+    v_3_4  v_4_3
+    ------------
+        0      0
+    
+    Stopping this subproblem because EDM < R.
+    Newly marked solved variables: {'v_4_3': 0, 'v_3_4': 0}
+    Updated global IG_total=10.00, IL_total=1.98
+    
+    ======================================================================
+    NEW SUBPROBLEM 16
+    global IG_total=10.00, IL_total=1.98
+    globally solved vars: {'v_4_3': 0, 'v_0_2': 1, 'v_2_2': 0, 'v_2_0': 1, 'v_0_4': 0, 'v_1_3': 1, 'v_2_1': 0, 'v_3_4': 0, 'v_2_4': 1, 'v_4_2': 1}
+    ======================================================================
+    
+    --- sub-step 1 ---
+    total_steps=17, sub_steps=0
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=0.00, IL=0.00
+    constraints in subproblem: []
+    assignments:
+    proposal = constraint: (0 + v_4_1 + 0 + 1 + 0 = 2) vars: ['v_4_1'] decision: ACCEPT contradiction: False
+    
+    --- sub-step 2 ---
+    total_steps=18, sub_steps=1
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=1.00, IL=0.00
+    constraints in subproblem: [((0 + v_4_1 + 0 + 1 + 0 = 2), vars={v_4_1})]
+    assignments:
+    
+    v_4_1
+    -----
+        1
+    
+    Stopping this subproblem because EDM < R.
+    Newly marked solved variables: {'v_4_1': 1}
+    Updated global IG_total=11.00, IL_total=1.98
+    
+    ======================================================================
+    NEW SUBPROBLEM 17
+    global IG_total=11.00, IL_total=1.98
+    globally solved vars: {'v_4_3': 0, 'v_0_2': 1, 'v_2_2': 0, 'v_2_0': 1, 'v_0_4': 0, 'v_1_3': 1, 'v_2_1': 0, 'v_3_4': 0, 'v_2_4': 1, 'v_4_1': 1, 'v_4_2': 1}
+    ======================================================================
+    
+    --- sub-step 1 ---
+    total_steps=18, sub_steps=0
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=0.00, IL=0.00
+    constraints in subproblem: []
+    assignments:
+    proposal = constraint: (1 + 1 + 1 + v_3_0 + v_4_0 + 0 + 0 = 3) vars: ['v_3_0'] decision: ACCEPT contradiction: False
+    
+    --- sub-step 2 ---
+    total_steps=19, sub_steps=1
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=1.00, IL=0.00
+    constraints in subproblem: [((1 + 1 + 1 + v_3_0 + v_4_0 + 0 + 0 = 3), vars={v_3_0})]
+    assignments:
+    
+    v_3_0
+    -----
+        0
+    
+    Stopping this subproblem because EDM < R.
+    Newly marked solved variables: {'v_3_0': 0}
+    Updated global IG_total=12.00, IL_total=1.98
+    
+    ======================================================================
+    NEW SUBPROBLEM 18
+    global IG_total=12.00, IL_total=1.98
+    globally solved vars: {'v_4_3': 0, 'v_0_2': 1, 'v_2_2': 0, 'v_2_0': 1, 'v_3_0': 0, 'v_0_4': 0, 'v_1_3': 1, 'v_2_1': 0, 'v_3_4': 0, 'v_2_4': 1, 'v_4_1': 1, 'v_4_2': 1}
+    ======================================================================
+    
+    --- sub-step 1 ---
+    total_steps=19, sub_steps=0
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=0.00, IL=0.00
+    constraints in subproblem: []
+    assignments:
+    proposal = constraint: (1 + 1 + 1 + 0 + v_4_0 + 0 + 0 = 3) vars: ['v_4_0'] decision: ACCEPT contradiction: False
+    
+    --- sub-step 2 ---
+    total_steps=20, sub_steps=1
+    R=1.00, ILtol=2.00, EDM=0.000
+    local IG=1.00, IL=0.00
+    constraints in subproblem: [((1 + 1 + 1 + 0 + v_4_0 + 0 + 0 = 3), vars={v_4_0})]
+    assignments:
+    
+    v_4_0
+    -----
+        0
+    
+    Stopping this subproblem because EDM < R.
+    Newly marked solved variables: {'v_4_0': 0}
+    Updated global IG_total=13.00, IL_total=1.98
     
     Agent finished.
 

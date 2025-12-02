@@ -3,7 +3,7 @@ from functools import reduce
 from enum import Enum, auto
 from collections import defaultdict, Counter
 from typing import Dict, Set, Iterator, Tuple, List, Any
-from models.CSP_working_model.grammar import (
+from grammar import (
     Expression,
     Variable,
     Sum,
@@ -12,9 +12,9 @@ from models.CSP_working_model.grammar import (
     LessThan,
     VariableState,
 )
-from models.CSP_working_model.constraints import EqualityConstraint, InequalityConstraint, PartialConstraint, generate_random_constraints
-from models.CSP_working_model.utils.assignment_utils import integrate_constraints_and_forget, get_IG_subproblem, remove_solved_variables
-from models.CSP_working_model.utils.assignment_utils import print_assignments, get_solved_variables, get_sizes_from_culling, get_variable_counts
+from constraints import EqualityConstraint, InequalityConstraint, PartialConstraint, generate_random_constraints
+from utils.assignment_utils import integrate_constraints_and_forget, get_IG_subproblem, remove_solved_variables
+from utils.assignment_utils import print_assignments, get_solved_variables, get_sizes_from_culling, get_variable_counts
 import numpy as np
 import random
 import csv
